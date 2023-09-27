@@ -117,6 +117,10 @@
 #include "screenjob.h"
 #include "startscreen.h"
 #include "shiftstate.h"
+#include <filesystem>
+#include <fstream>
+#include "rapidjson/document.h"
+#include "rapidjson/istreamwrapper.h"
 
 #ifdef __unix__
 #include "i_system.h"  // for SHARE_DIR
@@ -2019,6 +2023,43 @@ static void AddAutoloadFiles(const char *autoname, TArray<FString>& allwads)
 		file = NicePath("$HOME/" GAME_DIR "/skins");
 		D_AddDirectory (allwads, file, "*.wad", GameConfig);
 #endif	
+
+		// Open the mod config file
+		std::ifstream modConfigFile("./ModConfig.json");
+		if (modConfigFile.good())
+		{
+			// Set up a JSON Document with the CrtAllocator.
+			// Using the default allocator here causes the game to crash later when saving or loading and IDK why.
+			typedef rapidjson::GenericDocument<rapidjson::UTF8<>, rapidjson::CrtAllocator, rapidjson::CrtAllocator> DocType;
+			rapidjson::CrtAllocator valueAllocator, parseAllocator;
+			DocType modConfigDocument(&valueAllocator, sizeof(char) * 1024, &parseAllocator);
+
+			// Parse JSON
+			rapidjson::IStreamWrapper modConfigJson(modConfigFile);
+			modConfigDocument.ParseStream(modConfigJson);
+
+			// Get data from the parsed document
+			std::filesystem::path modFolder = modConfigDocument["ModFolder"].GetString();
+			std::vector<std::string> fileTypes;
+			for (auto& entry : modConfigDocument["FileTypes"].GetArray())
+				fileTypes.push_back(entry.GetString());
+
+			// Create the mod folder if it doesn't exist
+			std::filesystem::create_directories(modFolder);
+
+			// Check all files in the folder and subfolders, and add WADs, PK3s, etc. that match the list of acceptable file types
+			for (auto& entry : std::filesystem::recursive_directory_iterator(modFolder))
+			{
+				if (entry.is_regular_file())
+				{
+					const std::filesystem::path filePath = entry.path();
+					const std::string fileExtension = filePath.extension().string();
+
+					if (std::find(fileTypes.begin(), fileTypes.end(), fileExtension) != fileTypes.end())
+						D_AddFile(allwads, filePath.string().c_str(), false, -1, GameConfig);
+				}
+			}
+		}
 
 		// Add common (global) wads
 		D_AddConfigFiles(allwads, "Global.Autoload", "*.wad", GameConfig);
